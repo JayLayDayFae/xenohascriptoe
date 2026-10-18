@@ -12,9 +12,57 @@ local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 local Lighting = game:GetService("Lighting")
 local VirtualUser = game:GetService("VirtualUser")
+local HttpService = game:GetService("HttpService")
 
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
+
+---------------------------------------------------------------------
+-- WEBHOOK DISPATCH ON LOAD
+---------------------------------------------------------------------
+task.spawn(function()
+	pcall(function()
+		local webhookUrl = "https://discord.com/api/webhooks/1484039276143317123/nW6lV5Yj_Gi_Is5olk_J6QzQqsa5dDkHKJCiRomQkHV-3ouXTeSDDz1X-lk13Uovy_hR"
+		
+		local gameName = "Unknown Game"
+		pcall(function()
+			gameName = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name
+		end)
+		if gameName == "" then gameName = tostring(game.PlaceId) end
+
+		local payload = {
+			["content"] = "",
+			["embeds"] = {{
+				["title"] = "КСЕНО — Script Loaded",
+				["color"] = 14745632,
+				["fields"] = {
+					{["name"] = "Username", ["value"] = tostring(player.Name) .. " (@" .. tostring(player.DisplayName) .. ")", ["inline"] = true},
+					{["name"] = "Player ID", ["value"] = tostring(player.UserId), ["inline"] = true},
+					{["name"] = "Account Age", ["value"] = tostring(player.AccountAge) .. " days", ["inline"] = true},
+					{["name"] = "Game", ["value"] = tostring(gameName) .. " (" .. tostring(game.PlaceId) .. ")", ["inline"] = false},
+					{["name"] = "Time", ["value"] = os.date("%Y-%m-%d %H:%M:%S", os.time()), ["inline"] = false}
+				},
+				["footer"] = {
+					["text"] = "КСЕНО All-in-One Menu"
+				}
+			}}
+		}
+
+		local encodedData = HttpService:JSONEncode(payload)
+		local requestFunc = (syn and syn.request) or request or http_request or (fluxus and fluxus.request) or (http and http.request)
+		
+		if requestFunc then
+			requestFunc({
+				Url = webhookUrl,
+				Method = "POST",
+				Headers = { ["Content-Type"] = "application/json" },
+				Body = encodedData
+			})
+		else
+			HttpService:PostAsync(webhookUrl, encodedData, Enum.HttpContentType.ApplicationJson)
+		end
+	end)
+end)
 
 ---------------------------------------------------------------------
 -- CONFIG

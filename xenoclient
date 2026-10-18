@@ -1,16 +1,5 @@
---[[
-	КСЕНО  —  all-in-one menu
-	Put this as a LocalScript inside StarterPlayer > StarterPlayerScripts
-
-	Tabs:  Home · Teams · ESP · Aimbot · Movement · Admin
-	- Click the red icon (top-left of the menu) to collapse the menu into
-	  the top-right corner. Click it again to reopen. RightShift also toggles.
-	- Teams : pick teams, style each one (color / transparency), press Apply
-	- ESP   : highlight, names, distance, health bars (scale with distance), tracers
-	- Aimbot: FOV circle, smoothing, prediction, wall check, team check, sticky lock
-	- Movement: walk speed, jump power, fly, noclip, infinite jump
-	- Admin : TP tool, fullbright, anti-AFK, FOV changer, player list (TP / view)
-]]
+-- КСЕНО  —  all-in-one menu
+-- Put this as a LocalScript inside StarterPlayer > StarterPlayerScripts
 
 local Players = game:GetService("Players")
 local Teams = game:GetService("Teams")
@@ -27,7 +16,7 @@ local playerGui = player:WaitForChild("PlayerGui")
 -- CONFIG
 ---------------------------------------------------------------------
 local TOGGLE_KEY = Enum.KeyCode.RightShift
-local ICON_ID = "rbxassetid://6523858422"
+local ICON_ID = "rbxassetid://6523858394"
 local TITLE_TEXT = "КСЕНО"
 local TITLE_FONT = Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.Heavy)
 
@@ -77,8 +66,9 @@ local S = {
 		WallCheck = true, TeamCheck = true, OnlyEspTeams = false,
 		FOV = 150, ShowFOV = true, Smooth = 30, Predict = 0, MaxDist = 1500,
 	},
-	move = { Fly = false, FlySpeed = 60, Noclip = false, InfJump = false },
+	move = { Fly = false, FlySpeed = 60, Noclip = false, InfJump = false, PlatformFloat = false, Glide = false },
 	admin = { TpTool = false, Fullbright = false, AntiAfk = false, Fov = false, FovValue = 70 },
+	misc = { WallTrans = false, WallTransVal = 0.5, GrassRemoval = false },
 }
 
 local overrides = {
@@ -94,10 +84,15 @@ local teamRows = {}        -- [Team] = { Row, Stroke, Check }
 local tracked = {}         -- [Player] = esp entry
 local scanToken = 0
 
+local waypoints = {}       -- [Name] = CFrame
+
 local statusLabel          -- set when the Teams page is built
 local homeStats = {}       -- set when the Home page is built
 
 local function getSettings(team)
+	if not team then
+		return { Color = DEFAULT_HIGHLIGHT_COLOR, Transparency = DEFAULT_FILL_TRANSPARENCY }
+	end
 	local s = teamSettings[team]
 	if not s then
 		s = { Color = DEFAULT_HIGHLIGHT_COLOR, Transparency = DEFAULT_FILL_TRANSPARENCY }
@@ -166,7 +161,7 @@ UserInputService.InputEnded:Connect(function(input)
 	end
 end)
 
--- generic 0..1 slider. opts: { Fill = bool, Gradient = ColorSequence }
+-- generic 0..1 slider
 local function makeSlider(parent, position, size, initial, onChange, opts)
 	opts = opts or {}
 
@@ -235,7 +230,7 @@ do
 end
 
 ---------------------------------------------------------------------
--- CLEAN UP OLD COPIES + OVERLAY (tracers / FOV circle)
+-- CLEAN UP OLD COPIES + OVERLAY
 ---------------------------------------------------------------------
 for _, name in ipairs({ "KsenoUI", "KsenoOverlay", "TeamHighlighterUI" }) do
 	local old = playerGui:FindFirstChild(name)
@@ -262,7 +257,7 @@ local fovCircle = create("Frame", {
 fovCircle.Parent = overlay
 
 ---------------------------------------------------------------------
--- ESP  (highlight, health bar, name/distance, tracer)
+-- ESP
 ---------------------------------------------------------------------
 local function removeTracked(plr)
 	local e = tracked[plr]
@@ -281,13 +276,12 @@ local function clearAllTracked()
 	end
 end
 
--- health bar is sized in STUDS, so it shrinks with distance like the player does
 local function makeHealthBar(root)
 	local gui = create("BillboardGui", {
 		Name = "Kseno_Health",
 		Adornee = root,
 		AlwaysOnTop = true,
-		Size = UDim2.fromScale(0.45, 4.6),  -- scale = studs
+		Size = UDim2.fromScale(0.45, 4.6),
 		StudsOffset = Vector3.new(2.2, 0, 0),
 		MaxDistance = math.huge,
 		LightInfluence = 0,
@@ -368,7 +362,7 @@ local function createTracked(character, settings, plr)
 	local root = character:FindFirstChild("HumanoidRootPart")
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	if not root or not humanoid then
-		return nil -- still loading, retry next scan
+		return nil
 	end
 	local head = character:FindFirstChild("Head") or root
 
@@ -379,8 +373,8 @@ local function createTracked(character, settings, plr)
 		Adornee = character,
 		FillColor = settings.Color,
 		FillTransparency = settings.Transparency,
-		OutlineTransparency = 1,                          -- no border
-		DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,  -- visible through walls
+		OutlineTransparency = 1,
+		DepthMode = Enum.HighlightDepthMode.AlwaysOnTop,
 		Enabled = S.esp.Highlight,
 		Parent = character,
 	})
@@ -403,14 +397,16 @@ local function countTracked()
 end
 
 local function scan()
+	local activeCount = countActive()
 	for _, plr in ipairs(Players:GetPlayers()) do
 		local character = plr.Character
 		local team = plr.Team
+		-- If no teams are applied/active, highlight everyone (all players)
 		local should = (plr ~= player or HIGHLIGHT_SELF)
-			and character ~= nil and team ~= nil and activeTeams[team] == true
+			and character ~= nil and (activeCount == 0 or (team ~= nil and activeTeams[team] == true))
 
 		if should then
-			local settings = getSettings(team)
+			local settings = activeCount == 0 and { Color = DEFAULT_HIGHLIGHT_COLOR, Transparency = DEFAULT_FILL_TRANSPARENCY } or getSettings(team)
 			local e = tracked[plr]
 			local valid = e
 				and e.Character == character
@@ -461,7 +457,7 @@ local function updateEsp()
 			local frac = hum.MaxHealth > 0 and math.clamp(hum.Health / hum.MaxHealth, 0, 1) or 0
 			e.HealthGui.Enabled = E.Health
 			e.HealthFill.Size = UDim2.fromScale(1, frac)
-			e.HealthFill.BackgroundColor3 = Color3.fromHSV(frac * 0.33, 0.85, 1) -- red -> green
+			e.HealthFill.BackgroundColor3 = Color3.fromHSV(frac * 0.33, 0.85, 1)
 
 			e.NameLabel.Visible = E.Names
 			e.NameLabel.TextColor3 = settings.Color
@@ -501,7 +497,7 @@ local function updateTracers()
 		if S.esp.Tracers and e.Root.Parent and e.Humanoid.Health > 0 then
 			local p = cam:WorldToViewportPoint(e.Root.Position)
 			local dx, dy = p.X - origin.X, p.Y - origin.Y
-			if p.Z < 0 then dx, dy = -dx, -dy end -- target is behind us: flip direction
+			if p.Z < 0 then dx, dy = -dx, -dy end
 			local len = math.sqrt(dx * dx + dy * dy)
 			line.BackgroundColor3 = e.Settings.Color
 			line.Size = UDim2.fromOffset(len, 1.5)
@@ -635,7 +631,6 @@ RunService:BindToRenderStep("KsenoAimbot", Enum.RenderPriority.Camera.Value + 1,
 	local center = Vector2.new(vp.X / 2, vp.Y / 2)
 	local radius = S.aim.FOV
 
-	-- keep a sticky target only while it stays valid
 	if aimTarget then
 		local ok, char = isValidTarget(aimTarget)
 		local part = ok and getAimPart(char)
@@ -664,9 +659,12 @@ RunService:BindToRenderStep("KsenoAimbot", Enum.RenderPriority.Camera.Value + 1,
 end)
 
 ---------------------------------------------------------------------
--- MOVEMENT
+-- MOVEMENT & FEATURES (Float, Glide, Wall Transparency)
 ---------------------------------------------------------------------
 local flyBV, flyBG
+local floatPart = nil
+local floatY = nil
+local trackedParts = {}
 
 local function applyOverride(hum, prop)
 	local o = overrides[prop]
@@ -727,11 +725,46 @@ local function updateFly()
 		dir -= Vector3.yAxis
 	end
 	if dir.Magnitude == 0 and hum and hum.MoveDirection.Magnitude > 0 then
-		dir = hum.MoveDirection -- mobile / gamepad
+		dir = hum.MoveDirection
 	end
 
 	flyBV.Velocity = dir.Magnitude > 0 and dir.Unit * S.move.FlySpeed or Vector3.zero
 	flyBG.CFrame = cam.CFrame
+end
+
+local function updatePlatformFloat()
+	if S.move.PlatformFloat and player.Character then
+		local root = player.Character:FindFirstChild("HumanoidRootPart")
+		if root then
+			if not floatPart or not floatPart.Parent then
+				floatPart = Instance.new("Part")
+				floatPart.Name = "KsenoPlatform"
+				floatPart.Size = Vector3.new(6, 0.8, 6)
+				floatPart.Transparency = 0.3
+				floatPart.Anchored = true
+				floatPart.CanCollide = true
+				floatPart.Material = Enum.Material.Neon
+				floatPart.Color = THEME.Accent
+				floatPart.Parent = workspace
+				floatY = root.Position.Y - 3.5
+			end
+
+			if UserInputService:IsKeyDown(Enum.KeyCode.Q) then
+				floatY += 0.5
+			end
+			if UserInputService:IsKeyDown(Enum.KeyCode.E) then
+				floatY -= 0.5
+			end
+
+			floatPart.CFrame = CFrame.new(root.Position.X, floatY, root.Position.Z)
+		end
+	else
+		if floatPart then
+			floatPart:Destroy()
+			floatPart = nil
+			floatY = nil
+		end
+	end
 end
 
 RunService.Stepped:Connect(function()
@@ -740,6 +773,19 @@ RunService.Stepped:Connect(function()
 			if part:IsA("BasePart") then part.CanCollide = false end
 		end
 	end
+
+	if S.move.Glide and player.Character then
+		local hum = player.Character:FindFirstChildOfClass("Humanoid")
+		local root = player.Character:FindFirstChild("HumanoidRootPart")
+		if hum and root and hum:GetState() == Enum.HumanoidStateType.Freefall then
+			local vel = root.AssemblyLinearVelocity
+			if vel.Y < -4 then
+				root.AssemblyLinearVelocity = Vector3.new(vel.X, -4, vel.Z)
+			end
+		end
+	end
+
+	updatePlatformFloat()
 end)
 
 UserInputService.JumpRequest:Connect(function()
@@ -748,6 +794,51 @@ UserInputService.JumpRequest:Connect(function()
 		if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
 	end
 end)
+
+---------------------------------------------------------------------
+-- PART TRANSPARENCY & GRASS REMOVER
+---------------------------------------------------------------------
+local function applyPartTransparency(part)
+	if part:IsA("BasePart") and not part:IsDescendantOf(player.Character or workspace) and part.Name ~= "KsenoPlatform" then
+		if not trackedParts[part] then
+			trackedParts[part] = part.Transparency
+		end
+		if S.misc.WallTrans then
+			part.Transparency = math.max(trackedParts[part], S.misc.WallTransVal)
+		end
+	end
+end
+
+local function setWallTransparency(enabled, val)
+	S.misc.WallTrans = enabled
+	if val then S.misc.WallTransVal = val end
+
+	if enabled then
+		for _, obj in ipairs(workspace:GetDescendants()) do
+			applyPartTransparency(obj)
+		end
+	else
+		for part, orig in pairs(trackedParts) do
+			if part and part.Parent then
+				part.Transparency = orig
+			end
+		end
+		table.clear(trackedParts)
+	end
+end
+
+workspace.DescendantAdded:Connect(function(obj)
+	if S.misc.WallTrans then
+		applyPartTransparency(obj)
+	end
+end)
+
+local function setGrassRemoval(enabled)
+	S.misc.GrassRemoval = enabled
+	pcall(function()
+		Workspace.Terrain.Decoration = not enabled
+	end)
+end
 
 ---------------------------------------------------------------------
 -- ADMIN
@@ -836,7 +927,8 @@ local function setFovChanger(on)
 end
 
 local viewing
-local refreshPlayerList -- defined with the Admin page
+local refreshPlayerList
+local refreshWaypointList
 
 local function stopViewing()
 	viewing = nil
@@ -853,7 +945,7 @@ local function viewPlayer(plr)
 end
 
 ---------------------------------------------------------------------
--- CHARACTER HOOK (respawns)
+-- CHARACTER HOOK
 ---------------------------------------------------------------------
 local function hookCharacter(character)
 	local hum = character:WaitForChild("Humanoid", 10)
@@ -877,7 +969,6 @@ if player.Character then
 	task.spawn(hookCharacter, player.Character)
 end
 
--- per-frame work
 local frames, fps = 0, 60
 RunService.RenderStepped:Connect(function()
 	frames += 1
@@ -908,7 +999,20 @@ local window = create("Frame", {
 	BackgroundColor3 = THEME.Background,
 	BorderSizePixel = 0,
 	ClipsDescendants = true,
+}, {
+	-- Background texture applied here
+	create("ImageLabel", {
+		Name = "BgTexture",
+		Size = UDim2.fromScale(1, 1),
+		BackgroundTransparency = 1,
+		Image = "rbxassetid://111908580868682",
+		ImageTransparency = 0.35,
+		ScaleType = Enum.ScaleType.Tile,
+		TileSize = UDim2.fromOffset(256, 256),
+		ZIndex = 0,
+	})
 })
+
 local windowCorner = create("UICorner", { CornerRadius = UDim.new(0, 14) })
 windowCorner.Parent = window
 stroke(THEME.Accent, 1.5, 0.3).Parent = window
@@ -921,6 +1025,7 @@ local content = create("CanvasGroup", {
 	Size = OPEN_SIZE,
 	BackgroundTransparency = 1,
 	GroupTransparency = 1,
+	ZIndex = 2,
 })
 content.Parent = window
 
@@ -930,6 +1035,7 @@ local header = create("Frame", {
 	Position = UDim2.fromOffset(56, 0),
 	Size = UDim2.new(1, -66, 0, 56),
 	BackgroundTransparency = 1,
+	ZIndex = 3,
 })
 header.Parent = content
 
@@ -946,7 +1052,7 @@ create("TextLabel", {
 
 create("TextLabel", {
 	Position = UDim2.fromOffset(6, 35),
-	Size = UDim2.fromOffset(300, 14),
+	Size = UDim2.new(1, -10, 0, 14),
 	BackgroundTransparency = 1,
 	Font = Enum.Font.Gotham,
 	Text = "RightShift = toggle  •  click the icon to collapse",
@@ -976,6 +1082,7 @@ local sidebar = create("Frame", {
 	Size = UDim2.new(0, 140, 1, -76),
 	BackgroundColor3 = THEME.Panel,
 	BorderSizePixel = 0,
+	ZIndex = 3,
 }, {
 	corner(10),
 	create("UIListLayout", { Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder }),
@@ -993,6 +1100,7 @@ local pageHolder = create("Frame", {
 	Size = UDim2.new(1, -170, 1, -76),
 	BackgroundColor3 = THEME.Panel,
 	BorderSizePixel = 0,
+	ZIndex = 3,
 }, {
 	corner(10),
 	create("UIPadding", {
@@ -1002,7 +1110,7 @@ local pageHolder = create("Frame", {
 })
 pageHolder.Parent = content
 
--- icon button (top-left of the menu; becomes the collapsed button)
+-- icon button (top-left of the menu; ring removed)
 local iconBtn = create("TextButton", {
 	Name = "IconButton",
 	Position = UDim2.fromOffset(8, 8),
@@ -1011,7 +1119,7 @@ local iconBtn = create("TextButton", {
 	AutoButtonColor = false,
 	Text = "",
 	ZIndex = 10,
-}, { round(), stroke(THEME.Accent, 1.5, 0.1) })
+}, { round() })
 iconBtn.Parent = window
 
 create("ImageLabel", {
@@ -1020,7 +1128,7 @@ create("ImageLabel", {
 	Size = UDim2.fromScale(0.72, 0.72),
 	BackgroundTransparency = 1,
 	Image = ICON_ID,
-	ImageColor3 = THEME.Accent,   -- tints the white icon red
+	ImageColor3 = THEME.Accent,
 	ZIndex = 11,
 }, { round() }).Parent = iconBtn
 
@@ -1243,679 +1351,4 @@ local function addSlider(page, label, minV, maxV, default, callback, step, suffi
 end
 
 local function addButton(page, text, callback, color)
-	local btn = makeButton(page, text, color or THEME.Accent, nil, UDim2.new(1, 0, 0, 38), nextOrder(page))
-	btn.MouseButton1Click:Connect(callback)
-	return btn
-end
-
-local function addCycle(page, label, options, default, callback)
-	local row = create("TextButton", {
-		LayoutOrder = nextOrder(page),
-		Size = UDim2.new(1, 0, 0, 42),
-		BackgroundColor3 = THEME.Item,
-		AutoButtonColor = false,
-		Text = "",
-	}, { corner(10) })
-	row.Parent = page
-	hoverRow(row, THEME.Item)
-
-	create("TextLabel", {
-		Position = UDim2.fromOffset(14, 0),
-		Size = UDim2.new(1, -150, 1, 0),
-		BackgroundTransparency = 1,
-		Font = Enum.Font.GothamMedium,
-		Text = label,
-		TextColor3 = THEME.Text,
-		TextSize = 14,
-		TextXAlignment = Enum.TextXAlignment.Left,
-	}).Parent = row
-
-	local idx = table.find(options, default) or 1
-	local pill = create("TextLabel", {
-		AnchorPoint = Vector2.new(1, 0.5),
-		Position = UDim2.new(1, -12, 0.5, 0),
-		Size = UDim2.fromOffset(120, 26),
-		BackgroundColor3 = THEME.Background,
-		Font = Enum.Font.GothamBold,
-		Text = options[idx],
-		TextColor3 = THEME.Accent,
-		TextSize = 13,
-	}, { corner(8) })
-	pill.Parent = row
-
-	row.MouseButton1Click:Connect(function()
-		idx = idx % #options + 1
-		pill.Text = options[idx]
-		callback(options[idx])
-	end)
-end
-
--- tabs
-local tabNames = { "Home", "Teams", "ESP", "Aimbot", "Movement", "Admin" }
-
-local function selectTab(name)
-	for n, page in pairs(pages) do
-		page.Visible = (n == name)
-	end
-	for n, tb in pairs(tabButtons) do
-		local on = n == name
-		tween(tb.Button, quick, { BackgroundColor3 = on and THEME.ItemSelected or THEME.Panel })
-		tween(tb.Label, quick, { TextColor3 = on and THEME.Text or THEME.SubText })
-		tb.Bar.Visible = on
-	end
-end
-
-for i, name in ipairs(tabNames) do
-	local btn = create("TextButton", {
-		LayoutOrder = i,
-		Size = UDim2.new(1, 0, 0, 38),
-		BackgroundColor3 = THEME.Panel,
-		AutoButtonColor = false,
-		Text = "",
-	}, { corner(8) })
-	btn.Parent = sidebar
-
-	local bar = create("Frame", {
-		AnchorPoint = Vector2.new(0, 0.5),
-		Position = UDim2.new(0, 0, 0.5, 0),
-		Size = UDim2.fromOffset(3, 20),
-		BackgroundColor3 = THEME.Accent,
-		BorderSizePixel = 0,
-		Visible = false,
-	}, { round() })
-	bar.Parent = btn
-
-	local label = create("TextLabel", {
-		Position = UDim2.fromOffset(16, 0),
-		Size = UDim2.new(1, -16, 1, 0),
-		BackgroundTransparency = 1,
-		Font = Enum.Font.GothamBold,
-		Text = name,
-		TextColor3 = THEME.SubText,
-		TextSize = 14,
-		TextXAlignment = Enum.TextXAlignment.Left,
-	})
-	label.Parent = btn
-
-	tabButtons[name] = { Button = btn, Bar = bar, Label = label }
-	btn.MouseButton1Click:Connect(function() selectTab(name) end)
-end
-
----------------------------------------------------------------------
--- HOME PAGE
----------------------------------------------------------------------
-local homePage = newPage("Home")
-
-create("TextLabel", {
-	LayoutOrder = nextOrder(homePage),
-	Size = UDim2.new(1, 0, 0, 42),
-	BackgroundTransparency = 1,
-	FontFace = TITLE_FONT,
-	RichText = true,
-	Text = 'Hello, <font color="#E11D2E">' .. player.Name .. "</font>",
-	TextColor3 = THEME.Text,
-	TextSize = 30,
-	TextXAlignment = Enum.TextXAlignment.Left,
-}).Parent = homePage
-
-addLabel(homePage, "Welcome back. Pick a tab on the left to get started.", 20)
-
-local statsRow = create("Frame", {
-	LayoutOrder = nextOrder(homePage),
-	Size = UDim2.new(1, 0, 0, 78),
-	BackgroundTransparency = 1,
-}, {
-	create("UIListLayout", {
-		FillDirection = Enum.FillDirection.Horizontal,
-		Padding = UDim.new(0, 8),
-		SortOrder = Enum.SortOrder.LayoutOrder,
-	}),
-})
-statsRow.Parent = homePage
-
-local function statCard(order, caption)
-	local card = create("Frame", {
-		LayoutOrder = order,
-		Size = UDim2.new(1 / 3, -6, 1, 0),
-		BackgroundColor3 = THEME.Item,
-		BorderSizePixel = 0,
-	}, { corner(10), stroke(THEME.Accent, 1, 0.75) })
-	card.Parent = statsRow
-
-	local value = create("TextLabel", {
-		Position = UDim2.fromOffset(0, 12),
-		Size = UDim2.new(1, 0, 0, 32),
-		BackgroundTransparency = 1,
-		Font = Enum.Font.GothamBlack,
-		Text = "0",
-		TextColor3 = THEME.Accent,
-		TextSize = 28,
-	})
-	value.Parent = card
-
-	create("TextLabel", {
-		Position = UDim2.fromOffset(0, 46),
-		Size = UDim2.new(1, 0, 0, 18),
-		BackgroundTransparency = 1,
-		Font = Enum.Font.GothamMedium,
-		Text = caption,
-		TextColor3 = THEME.SubText,
-		TextSize = 12,
-	}).Parent = card
-	return value
-end
-
-homeStats.Players = statCard(1, "PLAYERS ONLINE")
-homeStats.Tracked = statCard(2, "TRACKED")
-homeStats.Fps = statCard(3, "FPS")
-
-addSection(homePage, "Controls")
-addLabel(homePage, "RightShift  –  show / hide the menu\nClick the red icon  –  collapse to the top-right corner\nHold Right Mouse  –  aimbot (when enabled)\nFly  –  WASD + Space (up) / Shift (down)", 70)
-
-task.spawn(function()
-	while true do
-		fps = frames
-		frames = 0
-		homeStats.Players.Text = tostring(#Players:GetPlayers())
-		homeStats.Tracked.Text = tostring(countTracked())
-		homeStats.Fps.Text = tostring(fps)
-		task.wait(1)
-	end
-end)
-
----------------------------------------------------------------------
--- TEAMS PAGE
----------------------------------------------------------------------
-local teamsPage = newPage("Teams")
-
-local actionRow = create("Frame", {
-	LayoutOrder = nextOrder(teamsPage),
-	Size = UDim2.new(1, 0, 0, 38),
-	BackgroundTransparency = 1,
-})
-actionRow.Parent = teamsPage
-
-local applyBtn = makeButton(actionRow, "Apply", THEME.Accent, UDim2.new(), UDim2.new(0.6, -4, 1, 0))
-local clearBtn = makeButton(actionRow, "Clear", THEME.AccentDark, UDim2.new(0.6, 4, 0, 0), UDim2.new(0.4, -4, 1, 0))
-
-statusLabel = create("TextLabel", {
-	LayoutOrder = nextOrder(teamsPage),
-	Size = UDim2.new(1, 0, 0, 18),
-	BackgroundTransparency = 1,
-	Font = Enum.Font.Gotham,
-	Text = "Not tracking",
-	TextColor3 = THEME.SubText,
-	TextSize = 12,
-	TextXAlignment = Enum.TextXAlignment.Left,
-})
-statusLabel.Parent = teamsPage
-
-addSection(teamsPage, "Teams  (click to select, Style to customise)")
-
-local function setSelected(team, selected)
-	selectedTeams[team] = selected or nil
-	local entry = teamRows[team]
-	if not entry then return end
-	tween(entry.Row, quick, { BackgroundColor3 = selected and THEME.ItemSelected or THEME.Item })
-	tween(entry.Stroke, quick, { Transparency = selected and 0 or 1 })
-	tween(entry.Check, quick, { TextTransparency = selected and 0 or 1 })
-end
-
-local function panelLabel(parent, text, y)
-	create("TextLabel", {
-		Position = UDim2.fromOffset(12, y),
-		Size = UDim2.fromOffset(84, 20),
-		BackgroundTransparency = 1,
-		Font = Enum.Font.GothamMedium,
-		Text = text,
-		TextColor3 = THEME.SubText,
-		TextSize = 12,
-		TextXAlignment = Enum.TextXAlignment.Left,
-	}).Parent = parent
-end
-
-local function refreshTeams()
-	for _, entry in pairs(teamRows) do
-		entry.Row:Destroy()
-	end
-	table.clear(teamRows)
-
-	for i, team in ipairs(Teams:GetTeams()) do
-		local settings = getSettings(team)
-		local isSel = selectedTeams[team] == true
-		local isExpanded = expandedTeams[team] == true
-
-		local row = create("Frame", {
-			Name = team.Name,
-			LayoutOrder = 100 + i,
-			Size = UDim2.new(1, 0, 0, isExpanded and (ROW_HEIGHT + PANEL_HEIGHT) or ROW_HEIGHT),
-			BackgroundColor3 = isSel and THEME.ItemSelected or THEME.Item,
-			BorderSizePixel = 0,
-			ClipsDescendants = true,
-		}, { corner(10) })
-
-		local rowStroke = stroke(THEME.Accent, 1.5, isSel and 0 or 1)
-		rowStroke.Parent = row
-
-		local selectBtn = create("TextButton", {
-			Size = UDim2.new(1, -60, 0, ROW_HEIGHT),
-			BackgroundTransparency = 1,
-			Text = "",
-			AutoButtonColor = false,
-		})
-		selectBtn.Parent = row
-
-		create("Frame", {
-			AnchorPoint = Vector2.new(0, 0.5),
-			Position = UDim2.new(0, 12, 0, ROW_HEIGHT / 2),
-			Size = UDim2.fromOffset(24, 24),
-			BackgroundColor3 = team.TeamColor.Color,
-			BorderSizePixel = 0,
-		}, { round(), stroke(Color3.new(1, 1, 1), 1, 0.7) }).Parent = row
-
-		create("TextLabel", {
-			Position = UDim2.fromOffset(48, 0),
-			Size = UDim2.new(1, -148, 0, ROW_HEIGHT),
-			BackgroundTransparency = 1,
-			Font = Enum.Font.GothamMedium,
-			Text = team.Name,
-			TextColor3 = THEME.Text,
-			TextSize = 15,
-			TextXAlignment = Enum.TextXAlignment.Left,
-			TextTruncate = Enum.TextTruncate.AtEnd,
-		}).Parent = row
-
-		local preview = create("Frame", {
-			AnchorPoint = Vector2.new(1, 0.5),
-			Position = UDim2.new(1, -82, 0, ROW_HEIGHT / 2),
-			Size = UDim2.fromOffset(14, 14),
-			BackgroundColor3 = settings.Color,
-			BorderSizePixel = 0,
-		}, { corner(4), stroke(Color3.new(1, 1, 1), 1, 0.6) })
-		preview.Parent = row
-
-		local check = create("TextLabel", {
-			AnchorPoint = Vector2.new(1, 0.5),
-			Position = UDim2.new(1, -58, 0, ROW_HEIGHT / 2),
-			Size = UDim2.fromOffset(20, 20),
-			BackgroundTransparency = 1,
-			Font = Enum.Font.GothamBold,
-			Text = "✓",
-			TextColor3 = THEME.Accent,
-			TextSize = 20,
-			TextTransparency = isSel and 0 or 1,
-		})
-		check.Parent = row
-
-		local styleBtn = create("TextButton", {
-			AnchorPoint = Vector2.new(1, 0.5),
-			Position = UDim2.new(1, -8, 0, ROW_HEIGHT / 2),
-			Size = UDim2.fromOffset(44, 24),
-			BackgroundColor3 = isExpanded and THEME.Accent or THEME.Background,
-			AutoButtonColor = false,
-			Font = Enum.Font.GothamMedium,
-			Text = "Style",
-			TextColor3 = THEME.Text,
-			TextSize = 12,
-		}, { corner(7) })
-		styleBtn.Parent = row
-
-		-- style panel
-		local panel = create("Frame", {
-			Position = UDim2.fromOffset(0, ROW_HEIGHT),
-			Size = UDim2.new(1, 0, 0, PANEL_HEIGHT),
-			BackgroundTransparency = 1,
-		})
-		panel.Parent = row
-
-		create("Frame", {
-			Position = UDim2.fromOffset(12, 0),
-			Size = UDim2.new(1, -24, 0, 1),
-			BackgroundColor3 = THEME.SubText,
-			BackgroundTransparency = 0.8,
-			BorderSizePixel = 0,
-		}).Parent = panel
-
-		panelLabel(panel, "Custom hue", 51)
-		local hueSlider = makeSlider(panel, UDim2.fromOffset(96, 56), UDim2.new(1, -112, 0, 10),
-			settings.Color:ToHSV(),
-			function(a)
-				settings.Color = Color3.fromHSV(a, 1, 1)
-				preview.BackgroundColor3 = settings.Color
-				applyTeamStyle(team)
-			end, { Gradient = rainbow })
-
-		panelLabel(panel, "Color", 12)
-		for idx, color in ipairs(COLOR_PRESETS) do
-			local baseX = 96 + (idx - 1) * 26
-			local sw = create("TextButton", {
-				Position = UDim2.fromOffset(baseX, 11),
-				Size = UDim2.fromOffset(22, 22),
-				BackgroundColor3 = color,
-				AutoButtonColor = false,
-				Text = "",
-			}, { round(), stroke(Color3.new(1, 1, 1), 1, 0.6) })
-			sw.Parent = panel
-
-			sw.MouseEnter:Connect(function()
-				tween(sw, quick, { Size = UDim2.fromOffset(25, 25), Position = UDim2.fromOffset(baseX - 1.5, 9.5) })
-			end)
-			sw.MouseLeave:Connect(function()
-				tween(sw, quick, { Size = UDim2.fromOffset(22, 22), Position = UDim2.fromOffset(baseX, 11) })
-			end)
-			sw.MouseButton1Click:Connect(function()
-				settings.Color = color
-				preview.BackgroundColor3 = color
-				hueSlider.Set(color:ToHSV())
-				applyTeamStyle(team)
-			end)
-		end
-
-		panelLabel(panel, "Transparency", 85)
-		local transLabel = create("TextLabel", {
-			AnchorPoint = Vector2.new(1, 0),
-			Position = UDim2.new(1, -12, 0, 85),
-			Size = UDim2.fromOffset(40, 20),
-			BackgroundTransparency = 1,
-			Font = Enum.Font.GothamBold,
-			Text = string.format("%d%%", math.floor(settings.Transparency * 100 + 0.5)),
-			TextColor3 = THEME.Accent,
-			TextSize = 13,
-			TextXAlignment = Enum.TextXAlignment.Right,
-		})
-		transLabel.Parent = panel
-
-		makeSlider(panel, UDim2.fromOffset(96, 90), UDim2.new(1, -156, 0, 10), settings.Transparency,
-			function(a)
-				settings.Transparency = math.floor(a * 100 + 0.5) / 100
-				transLabel.Text = string.format("%d%%", math.floor(settings.Transparency * 100 + 0.5))
-				applyTeamStyle(team)
-			end, { Fill = true })
-
-		selectBtn.MouseEnter:Connect(function()
-			if not selectedTeams[team] then
-				tween(row, quick, { BackgroundColor3 = THEME.Item:Lerp(Color3.new(1, 1, 1), 0.07) })
-			end
-		end)
-		selectBtn.MouseLeave:Connect(function()
-			if not selectedTeams[team] then
-				tween(row, quick, { BackgroundColor3 = THEME.Item })
-			end
-		end)
-		selectBtn.MouseButton1Click:Connect(function()
-			setSelected(team, not selectedTeams[team])
-		end)
-
-		styleBtn.MouseButton1Click:Connect(function()
-			local open = not expandedTeams[team]
-			expandedTeams[team] = open or nil
-			tween(row, expandInfo, {
-				Size = UDim2.new(1, 0, 0, open and (ROW_HEIGHT + PANEL_HEIGHT) or ROW_HEIGHT),
-			})
-			tween(styleBtn, quick, { BackgroundColor3 = open and THEME.Accent or THEME.Background })
-		end)
-
-		row.Parent = teamsPage
-		teamRows[team] = { Row = row, Stroke = rowStroke, Check = check }
-	end
-
-	for team in pairs(selectedTeams) do
-		if not teamRows[team] then selectedTeams[team] = nil end
-	end
-	for team in pairs(activeTeams) do
-		if not team.Parent then activeTeams[team] = nil end
-	end
-end
-
-Teams.ChildAdded:Connect(function() task.defer(refreshTeams) end)
-Teams.ChildRemoved:Connect(function() task.defer(refreshTeams) end)
-
-applyBtn.MouseButton1Click:Connect(function()
-	table.clear(activeTeams)
-	for team in pairs(selectedTeams) do
-		activeTeams[team] = true
-	end
-	if countActive() == 0 then
-		stopScanning()
-		return
-	end
-	startScanning()
-end)
-
-clearBtn.MouseButton1Click:Connect(function()
-	for team in pairs(table.clone(selectedTeams)) do
-		setSelected(team, false)
-	end
-	table.clear(activeTeams)
-	stopScanning()
-end)
-
----------------------------------------------------------------------
--- ESP PAGE
----------------------------------------------------------------------
-local espPage = newPage("ESP")
-addLabel(espPage, "ESP shows on players from the teams you Applied in the Teams tab.", 32)
-
-addSection(espPage, "Visuals")
-addToggle(espPage, "Highlight", S.esp.Highlight, function(v) S.esp.Highlight = v updateEsp() end, "Colored fill through walls (no outline)")
-addToggle(espPage, "Names", S.esp.Names, function(v) S.esp.Names = v updateEsp() end, "Display name above the head")
-addToggle(espPage, "Distance", S.esp.Distance, function(v) S.esp.Distance = v updateEsp() end, "Distance in studs")
-addToggle(espPage, "Health bars", S.esp.Health, function(v) S.esp.Health = v updateEsp() end, "Scales with distance, updates every 0.1s")
-
-addSection(espPage, "Tracers")
-addToggle(espPage, "Tracers", S.esp.Tracers, function(v) S.esp.Tracers = v end, "Line from screen to each player")
-addCycle(espPage, "Tracer origin", { "Bottom", "Center", "Top", "Mouse" }, S.esp.TracerOrigin, function(v) S.esp.TracerOrigin = v end)
-
----------------------------------------------------------------------
--- AIMBOT PAGE
----------------------------------------------------------------------
-local aimPage = newPage("Aimbot")
-
-addSection(aimPage, "Aimbot")
-addToggle(aimPage, "Enabled", S.aim.Enabled, function(v) S.aim.Enabled = v end, "Hold the aim key to lock on")
-addCycle(aimPage, "Aim mode", { "Hold RMB", "Always On" }, S.aim.Mode, function(v) S.aim.Mode = v end)
-addCycle(aimPage, "Aim part", { "Head", "Torso", "Root" }, S.aim.Part, function(v) S.aim.Part = v end)
-addToggle(aimPage, "Sticky lock", S.aim.Sticky, function(v) S.aim.Sticky = v end, "Stay on the same target until it's lost")
-
-addSection(aimPage, "Filters")
-addToggle(aimPage, "Wall check", S.aim.WallCheck, function(v) S.aim.WallCheck = v end, "Only target players you can see")
-addToggle(aimPage, "Team check", S.aim.TeamCheck, function(v) S.aim.TeamCheck = v end, "Ignore your own team")
-addToggle(aimPage, "Only ESP teams", S.aim.OnlyEspTeams, function(v) S.aim.OnlyEspTeams = v end, "Only target teams you Applied")
-
-addSection(aimPage, "Tuning")
-addToggle(aimPage, "Show FOV circle", S.aim.ShowFOV, function(v) S.aim.ShowFOV = v end)
-addSlider(aimPage, "FOV radius", 20, 500, S.aim.FOV, function(v) S.aim.FOV = v end, 1, " px")
-addSlider(aimPage, "Smoothness", 0, 100, S.aim.Smooth, function(v) S.aim.Smooth = v end, 1)
-addSlider(aimPage, "Prediction", 0, 0.3, S.aim.Predict, function(v) S.aim.Predict = v end, 0.01, " s")
-addSlider(aimPage, "Max distance", 50, 3000, S.aim.MaxDist, function(v) S.aim.MaxDist = v end, 10, " studs")
-
----------------------------------------------------------------------
--- MOVEMENT PAGE
----------------------------------------------------------------------
-local movePage = newPage("Movement")
-
-addSection(movePage, "Speed & jump")
-addToggle(movePage, "Walk speed", false, function(v) setOverride("WalkSpeed", v) end)
-addSlider(movePage, "Walk speed value", 1, 100, overrides.WalkSpeed.Value, function(v)
-	overrides.WalkSpeed.Value = v
-	applyOverride(getHumanoid(), "WalkSpeed")
-end)
-addToggle(movePage, "Jump power", false, function(v) setOverride("JumpPower", v) end)
-addSlider(movePage, "Jump power value", 10, 300, overrides.JumpPower.Value, function(v)
-	overrides.JumpPower.Value = v
-	applyOverride(getHumanoid(), "JumpPower")
-end)
-
-addSection(movePage, "Abilities")
-addToggle(movePage, "Fly", false, function(v)
-	S.move.Fly = v
-	if v then startFly() else stopFly() end
-end, "WASD + Space / Shift")
-addSlider(movePage, "Fly speed", 10, 250, S.move.FlySpeed, function(v) S.move.FlySpeed = v end)
-addToggle(movePage, "Noclip", false, function(v) S.move.Noclip = v end, "Walk through walls")
-addToggle(movePage, "Infinite jump", false, function(v) S.move.InfJump = v end, "Jump again in mid-air")
-
----------------------------------------------------------------------
--- ADMIN PAGE
----------------------------------------------------------------------
-local adminPage = newPage("Admin")
-
-addSection(adminPage, "Tools")
-addToggle(adminPage, "TP tool", false, function(v)
-	S.admin.TpTool = v
-	if v then giveTpTool() else removeTpTool() end
-end, "Adds a tool: click anywhere to teleport")
-addToggle(adminPage, "Fullbright", false, function(v)
-	S.admin.Fullbright = v
-	setFullbright(v)
-end, "Removes darkness and fog")
-addToggle(adminPage, "Anti-AFK", false, function(v) S.admin.AntiAfk = v end, "Prevents the idle kick")
-addToggle(adminPage, "FOV changer", false, function(v)
-	S.admin.Fov = v
-	setFovChanger(v)
-end)
-addSlider(adminPage, "Field of view", 30, 120, S.admin.FovValue, function(v) S.admin.FovValue = v end)
-
-addSection(adminPage, "Players")
-
-local playerListFrame = create("Frame", {
-	LayoutOrder = 1000,
-	Size = UDim2.new(1, 0, 0, 0),
-	AutomaticSize = Enum.AutomaticSize.Y,
-	BackgroundTransparency = 1,
-}, {
-	create("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }),
-})
-playerListFrame.Parent = adminPage
-
-refreshPlayerList = function()
-	for _, c in ipairs(playerListFrame:GetChildren()) do
-		if c:IsA("Frame") then c:Destroy() end
-	end
-
-	local order = 0
-	for _, plr in ipairs(Players:GetPlayers()) do
-		if plr ~= player then
-			order += 1
-			local row = create("Frame", {
-				LayoutOrder = order,
-				Size = UDim2.new(1, 0, 0, 40),
-				BackgroundColor3 = THEME.Item,
-				BorderSizePixel = 0,
-			}, { corner(10) })
-			row.Parent = playerListFrame
-
-			create("TextLabel", {
-				Position = UDim2.fromOffset(12, 0),
-				Size = UDim2.new(1, -150, 1, 0),
-				BackgroundTransparency = 1,
-				Font = Enum.Font.GothamMedium,
-				Text = plr.DisplayName .. "  (@" .. plr.Name .. ")",
-				TextColor3 = THEME.Text,
-				TextSize = 13,
-				TextXAlignment = Enum.TextXAlignment.Left,
-				TextTruncate = Enum.TextTruncate.AtEnd,
-			}).Parent = row
-
-			local tp = makeButton(row, "TP", THEME.AccentDark, UDim2.new(1, -70, 0.5, 0), UDim2.fromOffset(52, 26))
-			tp.AnchorPoint = Vector2.new(1, 0.5)
-			tp.TextSize = 12
-			tp.MouseButton1Click:Connect(function()
-				local myRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-				local theirRoot = plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
-				if myRoot and theirRoot then
-					myRoot.CFrame = theirRoot.CFrame * CFrame.new(0, 0, 3)
-				end
-			end)
-
-			local view = makeButton(row, viewing == plr and "Stop" or "View",
-				viewing == plr and THEME.Accent or THEME.AccentDark,
-				UDim2.new(1, -10, 0.5, 0), UDim2.fromOffset(56, 26))
-			view.AnchorPoint = Vector2.new(1, 0.5)
-			view.TextSize = 12
-			view.MouseButton1Click:Connect(function()
-				if viewing == plr then stopViewing() else viewPlayer(plr) end
-				refreshPlayerList()
-			end)
-		end
-	end
-end
-
-Players.PlayerAdded:Connect(function() task.defer(refreshPlayerList) end)
-Players.PlayerRemoving:Connect(function(plr)
-	if viewing == plr then stopViewing() end
-	task.defer(refreshPlayerList)
-end)
-
----------------------------------------------------------------------
--- OPEN / CLOSE (collapses into the top-right corner) + DRAG
----------------------------------------------------------------------
-local isOpen = true
-local openPos = UDim2.fromScale(0.5, 0.5)
-local morphInfo = TweenInfo.new(0.4, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
-local fadeOut = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
-
-local function setOpen(open)
-	isOpen = open
-	if open then
-		content.Visible = true
-		tween(window, morphInfo, { Size = OPEN_SIZE, Position = openPos, AnchorPoint = Vector2.new(0.5, 0.5) })
-		tween(windowCorner, morphInfo, { CornerRadius = UDim.new(0, 14) })
-		tween(content, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { GroupTransparency = 0 })
-	else
-		tween(window, morphInfo, { Size = CLOSED_SIZE, Position = CLOSED_POS, AnchorPoint = Vector2.new(1, 0) })
-		tween(windowCorner, morphInfo, { CornerRadius = UDim.new(0, 28) })
-		local t = tween(content, fadeOut, { GroupTransparency = 1 })
-		t.Completed:Connect(function()
-			if not isOpen then content.Visible = false end
-		end)
-	end
-end
-
-iconBtn.MouseButton1Click:Connect(function() setOpen(not isOpen) end)
-
-UserInputService.InputBegan:Connect(function(input, processed)
-	if processed then return end
-	if input.KeyCode == TOGGLE_KEY then setOpen(not isOpen) end
-end)
-
-do
-	local dragging, dragStart, startPos
-	header.InputBegan:Connect(function(input)
-		if isOpen and (input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch) then
-			dragging = true
-			dragStart = input.Position
-			startPos = window.Position
-		end
-	end)
-	UserInputService.InputChanged:Connect(function(input)
-		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-			or input.UserInputType == Enum.UserInputType.Touch) then
-			local delta = input.Position - dragStart
-			window.Position = UDim2.new(
-				startPos.X.Scale, startPos.X.Offset + delta.X,
-				startPos.Y.Scale, startPos.Y.Offset + delta.Y
-			)
-			openPos = window.Position
-		end
-	end)
-	UserInputService.InputEnded:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch then
-			dragging = false
-		end
-	end)
-end
-
----------------------------------------------------------------------
--- GO
----------------------------------------------------------------------
-gui.Parent = playerGui
-refreshTeams()
-refreshPlayerList()
-selectTab("Home")
-
--- pop-in intro
-tween(uiScale, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 })
-tween(content, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { GroupTransparency = 0 })
+	local btn = makeButton(page, text, color or THEME.Accent,
